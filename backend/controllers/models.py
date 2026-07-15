@@ -13,6 +13,9 @@ class User(db.Model, UserMixin):
     fs_token_uniquifier = db.Column(db.String(255), unique=True, nullable=True)
 
     roles = db.relationship('Role', secondary='user_roles')
+    
+    student_profile = db.relationship('Student', backref='user', uselist=False, cascade="all, delete-orphan")
+    company_profile = db.relationship('Company', backref='user', uselist=False, cascade="all, delete-orphan")
 
 class Role(db.Model, RoleMixin):
     id = db.Column(db.Integer, primary_key=True)
@@ -31,7 +34,7 @@ class Company(db.Model):
     webs = db.Column(db.String(255), unique=True, nullable=False)
     status = db.Column(db.Integer, default=1, nullable=False)
 
-    drives = db.relationship('Drive', backref='company', lazy=True)
+    drives = db.relationship('Drive', backref='company', lazy=True, cascade="all, delete-orphan")
 
 
 class Student(db.Model):
@@ -40,8 +43,9 @@ class Student(db.Model):
     branch = db.Column(db.String(255), nullable=False)
     cgpa = db.Column(db.Float, nullable=False)
     status = db.Column(db.Integer, default=0, nullable=False)
+    resume_path = db.Column(db.String(255), nullable=True)
 
-    applications = db.relationship('Appli', backref='student', lazy=True)
+    applications = db.relationship('Appli', backref='student', lazy=True, cascade="all, delete-orphan")
 
 class Drive(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -54,7 +58,7 @@ class Drive(db.Model):
     deadline = db.Column(DateTime, nullable=False)
     status = db.Column(db.Integer, default=0, nullable=False)
 
-    applications = db.relationship('Appli', backref='drive', lazy=True)
+    applications = db.relationship('Appli', backref='drive', lazy=True, cascade="all, delete-orphan")
 
 class Appli(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -62,4 +66,3 @@ class Appli(db.Model):
     stud_id = db.Column(db.Integer, db.ForeignKey('student.id'))
     applied_at = db.Column(DateTime, nullable=False)
     status = db.Column(db.Integer, default=0, nullable=False)
-    

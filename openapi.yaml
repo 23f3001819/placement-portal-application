@@ -1,0 +1,1314 @@
+openapi: 3.0.3
+info:
+  title: Placement Portal API
+  version: 1.0.0
+  description: |
+    API Specification for the Placement Portal Application.
+
+    ### User Roles
+    - **Admin**: Can view portal statistics, manage company approvals, manage student statuses, and review/delete placement drives.
+    - **Student**: Can view/update their profile (including uploading resumes), find eligible placement drives, apply or withdraw applications, and export application history to CSV.
+    - **Company**: Can create/manage drives, view applicants, update application statuses, and edit company profiles.
+
+    ### Status Codes Reference
+    - **Company Status**: `0` = Blacklisted, `1` = Active
+    - **Student Status**: `0` = Active (unplaced), `1` = Placed, `2` = Blacklisted
+    - **Drive Status**: `0` = Pending Approval, `1` = Approved/Active, `2` = Ended/Closed
+    - **Application Status**: `0` = Applied/Pending, `1` = Rejected, `2` = Accepted (placed)
+servers:
+  - url: http://localhost:5000/api
+    description: Local Flask Development Server
+security:
+  - AuthenticationToken: []
+paths:
+  /login:
+    post:
+      summary: User Login
+      description: Authenticate user with email and password to receive an authentication token.
+      security: []
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: admin@gmail.com
+                password:
+                  type: string
+                  format: password
+                  example: admin123
+              required:
+                - email
+                - password
+      responses:
+        200:
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Logged in successfully
+                  auth_token:
+                    type: string
+                    example: MjNm...
+                  user:
+                    type: object
+                    properties:
+                      email:
+                        type: string
+                        format: email
+                        example: admin@gmail.com
+                      role:
+                        type: array
+                        items:
+                          type: string
+                        example: ["admin", "student", "company"]
+        400:
+          description: Bad Request (missing email or password)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        401:
+          description: Unauthorized (invalid password)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        404:
+          description: Not Found (user not registered)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+
+  /logout:
+    post:
+      summary: User Logout
+      description: Log out the current user and invalidate the session.
+      tags:
+        - Authentication
+      responses:
+        200:
+          description: Logout successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        401:
+          description: Unauthorized (missing or invalid token)
+
+  /register:
+    post:
+      summary: User Registration
+      description: Register a new student or company user. Uses multipart/form-data for handling profile parameters and file uploads (resume PDF).
+      security: []
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  example: Jane Doe
+                email:
+                  type: string
+                  format: email
+                  example: jane@example.com
+                password:
+                  type: string
+                  format: password
+                  example: securepassword
+                role:
+                  type: string
+                  enum: [student, company]
+                  example: student
+                branch:
+                  type: string
+                  description: Required if role is student.
+                  example: Computer Science
+                cgpa:
+                  type: number
+                  format: float
+                  description: Required if role is student.
+                  example: 9.2
+                resume:
+                  type: string
+                  format: binary
+                  description: PDF Resume file. Required/Optional if role is student.
+                hr_con:
+                  type: string
+                  description: Required if role is company. Contact details.
+                  example: 9876543210
+                webs:
+                  type: string
+                  format: uri
+                  description: Required if role is company. Website URL.
+                  example: https://company.com
+              required:
+                - name
+                - email
+                - password
+                - role
+      responses:
+        200:
+          description: User registered successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Student registered successfully.
+                  user:
+                    type: object
+        400:
+          description: Bad Request (missing role-specific details or invalid input)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        409:
+          description: Conflict (user already exists)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+
+  /admin/stats:
+    get:
+      summary: Get Portal Statistics
+      description: Get overall metrics including count of students, companies, and drives.
+      tags:
+        - Admin
+      responses:
+        200:
+          description: Statistics retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_students:
+                    type: integer
+                    example: 120
+                  total_companies:
+                    type: integer
+                    example: 25
+                  total_drives:
+                    type: integer
+                    example: 18
+
+  /admin/companies:
+    get:
+      summary: Get Registered Companies
+      description: Retrieve all companies with optional search filter by name.
+      tags:
+        - Admin
+      parameters:
+        - name: search
+          in: query
+          description: Filter companies by name.
+          required: false
+          schema:
+            type: string
+      responses:
+        200:
+          description: List of companies
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CompanyAdminView'
+
+  /admin/companies/{comp_id}:
+    put:
+      summary: Update Company Status
+      description: Approve or blacklist a company.
+      tags:
+        - Admin
+      parameters:
+        - name: comp_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: integer
+                  description: "0 for blacklisted, 1 for active"
+                  example: 0
+              required:
+                - status
+      responses:
+        200:
+          description: Company status updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        404:
+          description: Company not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+    delete:
+      summary: Delete Company
+      description: Permanently delete a company and all associated profiles/drives from the system.
+      tags:
+        - Admin
+      parameters:
+        - name: comp_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        200:
+          description: Company permanently deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        404:
+          description: Company not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+
+  /admin/students:
+    get:
+      summary: Get Registered Students
+      description: Retrieve all student details with optional search filtering.
+      tags:
+        - Admin
+      parameters:
+        - name: search
+          in: query
+          description: Filter students by name.
+          required: false
+          schema:
+            type: string
+      responses:
+        200:
+          description: List of students
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StudentAdminView'
+
+  /admin/students/{stud_id}:
+    put:
+      summary: Update Student Status
+      description: Update student status (e.g. mark as placed or blacklisted).
+      tags:
+        - Admin
+      parameters:
+        - name: stud_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: integer
+                  description: "0 = active/unplaced, 1 = placed, 2 = blacklisted"
+                  example: 1
+              required:
+                - status
+      responses:
+        200:
+          description: Student status updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        404:
+          description: Student not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+    delete:
+      summary: Delete Student
+      description: Permanently delete a student and all their job applications.
+      tags:
+        - Admin
+      parameters:
+        - name: stud_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        200:
+          description: Student deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        404:
+          description: Student not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+
+  /admin/drives/{drive_id}:
+    put:
+      summary: Update Drive Status
+      description: Alter status of a drive (approve/activate/close).
+      tags:
+        - Admin
+      parameters:
+        - name: drive_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: integer
+                  description: "0 = pending, 1 = approved/active, 2 = ended"
+                  example: 1
+              required:
+                - status
+      responses:
+        200:
+          description: Drive status updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        404:
+          description: Drive not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+    delete:
+      summary: Delete Placement Drive
+      description: Permanently delete a drive.
+      tags:
+        - Admin
+      parameters:
+        - name: drive_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        200:
+          description: Drive deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        404:
+          description: Drive not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+
+  /drives:
+    get:
+      summary: Get All Drives
+      description: Public/unauthenticated endpoint to retrieve all drives.
+      security: []
+      tags:
+        - Placement Drives
+      responses:
+        200:
+          description: List of placement drives
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DriveDetails'
+    post:
+      summary: Create Placement Drive
+      description: Create a new placement drive. Account must not be blacklisted.
+      tags:
+        - Placement Drives
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                comp_id:
+                  type: integer
+                  description: Optional. Target company ID. If not supplied, defaults to logged-in user.
+                cgpa_c:
+                  type: number
+                  format: float
+                  description: Minimum CGPA cut-off.
+                  example: 7.5
+                branch_c:
+                  oneOf:
+                    - type: array
+                      items:
+                        type: string
+                    - type: string
+                  description: List of eligible branches (can be passed as a JSON array or a comma-separated string).
+                  example: ["Computer Science", "Electrical Engineering"]
+                job_role:
+                  type: string
+                  example: Software Development Engineer
+                job_desc:
+                  type: string
+                  example: Full stack web development using modern technologies.
+                job_ctc:
+                  type: number
+                  format: float
+                  description: CTC per annum in lakhs.
+                  example: 12.5
+                deadline:
+                  type: string
+                  format: date-time
+                  description: UTC timestamp in ISO 8601 format.
+                  example: "2026-08-01T23:59:00Z"
+              required:
+                - cgpa_c
+                - branch_c
+                - job_role
+                - job_ctc
+                - deadline
+      responses:
+        201:
+          description: Drive created, pending admin approval
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        403:
+          description: Blacklisted account or unauthorized company association
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        404:
+          description: Company profile not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+
+  /drives/{drive_id}:
+    get:
+      summary: Get Single Drive Details
+      description: Retrieve details for a specific drive created by the logged-in company.
+      tags:
+        - Placement Drives
+      parameters:
+        - name: drive_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        200:
+          description: Drive details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DriveDetails'
+        403:
+          description: Unauthorized to view this drive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        404:
+          description: Drive not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+    put:
+      summary: Update Drive Details
+      description: Update placement drive details (Company).
+      tags:
+        - Placement Drives
+      parameters:
+        - name: drive_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                cgpa_c:
+                  type: number
+                  format: float
+                branch_c:
+                  oneOf:
+                    - type: array
+                      items:
+                        type: string
+                    - type: string
+                job_role:
+                  type: string
+                job_desc:
+                  type: string
+                job_ctc:
+                  type: number
+                  format: float
+                deadline:
+                  type: string
+                  format: date-time
+                status:
+                  type: integer
+                  description: "Transitions: 0 to 1/2 is forbidden. 1 (active) to 2 (ended) sets deadline to now. 2 to 1 requires setting a future deadline."
+      responses:
+        200:
+          description: Drive details updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        400:
+          description: Future deadline required for reactivation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        403:
+          description: Unauthorized update or attempted change of pending drive status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+    delete:
+      summary: Withdraw Pending Drive
+      description: Delete/withdraw a drive. Allowed only if the drive is still pending approval (status 0).
+      tags:
+        - Placement Drives
+      parameters:
+        - name: drive_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        200:
+          description: Drive withdrawn successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        403:
+          description: Unauthorized withdrawal or trying to delete active/ended drives
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+
+  /getcompdrive/{co_id}:
+    get:
+      summary: List Drives of a Company
+      description: Retrieve all drives created by a company ID.
+      security: []
+      tags:
+        - Placement Drives
+      parameters:
+        - name: co_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        200:
+          description: List of company's drives
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DriveDetails'
+
+  /student/profile:
+    get:
+      summary: Get Student Profile
+      description: Get profile details of the logged in student.
+      tags:
+        - Student
+      responses:
+        200:
+          description: Student profile details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentProfile'
+    put:
+      summary: Update Student Profile
+      description: Modify profile details. Support multipart/form-data for optional resume upload (PDF).
+      tags:
+        - Student
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                branch:
+                  type: string
+                cgpa:
+                  type: number
+                  format: float
+                resume:
+                  type: string
+                  format: binary
+                  description: Optional updated resume PDF.
+      responses:
+        200:
+          description: Profile updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  user:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      email:
+                        type: string
+        400:
+          description: Email already in use
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+
+  /student/eligible-drives:
+    get:
+      summary: Get Eligible Drives
+      description: Fetch active, unexpired placement drives where the student meets CGPA criteria and branch matching.
+      tags:
+        - Student
+      responses:
+        200:
+          description: Eligible placement drives
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: integer
+                    company_name:
+                      type: string
+                    job_role:
+                      type: string
+                    job_ctc:
+                      type: number
+                      format: float
+                    deadline:
+                      type: string
+                      format: date-time
+
+  /student/export:
+    post:
+      summary: Export Application History
+      description: Trigger background task to CSV export the student's applications and send it to their email.
+      tags:
+        - Student
+      responses:
+        200:
+          description: Export job triggered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        404:
+          description: Student profile not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+
+  /applications:
+    get:
+      summary: List Job Applications
+      description: Get applications. Return all applications for Admins, and logged-in student's applications for Students.
+      tags:
+        - Applications
+      responses:
+        200:
+          description: List of applications
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  oneOf:
+                    - $ref: '#/components/schemas/ApplicationAdminView'
+                    - $ref: '#/components/schemas/ApplicationStudentView'
+        400:
+          description: Bad request (wrong role contexts)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+
+  /applications/{drive_id}:
+    post:
+      summary: Apply for Drive
+      description: Submit an application to an active drive. Student status must be active (not placed/blacklisted).
+      tags:
+        - Applications
+      parameters:
+        - name: drive_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        201:
+          description: Application successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        400:
+          description: Drive is not active or deadline passed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        403:
+          description: Forbidden (student is already placed or blacklisted)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        409:
+          description: Conflict (already applied to this drive)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+    get:
+      summary: Get Drive Applicants (Company)
+      description: Retrieve student application listings for a specific placement drive.
+      tags:
+        - Applications
+      parameters:
+        - name: drive_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        200:
+          description: List of applicants
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ApplicationCompanyView'
+        403:
+          description: Unauthorized company lookup
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+    delete:
+      summary: Withdraw Application
+      description: Withdraw application for a drive. Allowed only if the application has not been processed (status 0).
+      tags:
+        - Applications
+      parameters:
+        - name: drive_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        200:
+          description: Application withdrawn successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        403:
+          description: Cannot withdraw application once processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        404:
+          description: Application not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+
+  /manage-application/{app_id}:
+    put:
+      summary: Update Application Status (Company)
+      description: Manage student applications. Accepting a student (status 2) automatically updates their profile status to placed.
+      tags:
+        - Applications
+      parameters:
+        - name: app_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: integer
+                  description: "1 = rejected, 2 = accepted (placed)"
+                  example: 2
+              required:
+                - status
+      responses:
+        200:
+          description: Status updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        403:
+          description: Unauthorized to manage this application
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        404:
+          description: Application not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+
+  /compdetails:
+    post:
+      summary: Fetch Company Details by Email
+      description: Return details of a company by passing their registered email.
+      security: []
+      tags:
+        - Company
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: hr@intel.com
+              required:
+                - email
+      responses:
+        200:
+          description: Company details found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  id:
+                    type: integer
+                  user_id:
+                    type: integer
+                  hr_con:
+                    type: string
+                  webs:
+                    type: string
+                  status:
+                    type: integer
+        400:
+          description: Missing email parameter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        404:
+          description: Company not found or blacklisted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+
+  /company/profile:
+    get:
+      summary: Get Company Profile
+      description: Retrieve profile of logged in company user.
+      tags:
+        - Company
+      responses:
+        200:
+          description: Profile retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompanyProfile'
+        404:
+          description: Company profile not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+    put:
+      summary: Update Company Profile
+      description: Edit profile details including name, email, credentials, and links.
+      tags:
+        - Company
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                hr_con:
+                  type: string
+                webs:
+                  type: string
+                  format: uri
+      responses:
+        200:
+          description: Profile updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  user:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      email:
+                        type: string
+        400:
+          description: Bad request (email, hr_con, or website duplicate / validation failure)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        404:
+          description: Profile not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+
+  /admin/profile:
+    get:
+      summary: Get Admin Profile
+      description: Fetch logged-in admin user information.
+      tags:
+        - Admin
+      responses:
+        200:
+          description: Admin profile retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  email:
+                    type: string
+    put:
+      summary: Update Admin Profile
+      description: Modify name, email, or password for the admin.
+      tags:
+        - Admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+      responses:
+        200:
+          description: Profile updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  user:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      email:
+                        type: string
+        400:
+          description: Invalid data or email taken
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+
+components:
+  securitySchemes:
+    AuthenticationToken:
+      type: apiKey
+      in: header
+      name: Authentication-Token
+      description: Token format for Flask-Security Authentication (retrieve from /login response).
+
+  schemas:
+    MessageResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: Successful action.
+
+    CompanyAdminView:
+      type: object
+      properties:
+        comp_id:
+          type: integer
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        hr_con:
+          type: string
+        status:
+          type: integer
+          description: "0 = blacklisted, 1 = active"
+
+    StudentAdminView:
+      type: object
+      properties:
+        stud_id:
+          type: integer
+        name:
+          type: string
+        branch:
+          type: string
+        cgpa:
+          type: number
+          format: float
+        status:
+          type: integer
+          description: "0 = active, 1 = placed, 2 = blacklisted"
+
+    DriveDetails:
+      type: object
+      properties:
+        id:
+          type: integer
+        comp_id:
+          type: integer
+        company_name:
+          type: string
+          description: Company user's readable name. Only included in select views.
+        cgpa_c:
+          type: number
+          format: float
+          description: Minimum CGPA cut-off.
+        branch_c:
+          type: array
+          items:
+            type: string
+          description: Eligible branch list.
+        job_role:
+          type: string
+        job_desc:
+          type: string
+        job_ctc:
+          type: number
+          format: float
+        job_pay:
+          type: number
+          format: float
+        deadline:
+          type: string
+          format: date-time
+        status:
+          type: integer
+          description: "0 = pending, 1 = active, 2 = closed"
+
+    StudentProfile:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        branch:
+          type: string
+        cgpa:
+          type: number
+          format: float
+        resume_path:
+          type: string
+          nullable: true
+        status:
+          type: integer
+          description: "0 = active/unplaced, 1 = placed, 2 = blacklisted"
+
+    CompanyProfile:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        hr_con:
+          type: string
+        webs:
+          type: string
+          format: uri
+        status:
+          type: integer
+          description: "0 = blacklisted, 1 = active"
+
+    ApplicationAdminView:
+      type: object
+      properties:
+        app_id:
+          type: integer
+        student_name:
+          type: string
+        student_email:
+          type: string
+          format: email
+        company:
+          type: string
+          description: Company name.
+        job_role:
+          type: string
+        status:
+          type: integer
+          description: "0 = applied, 1 = rejected, 2 = accepted (placed)"
+        applied_at:
+          type: string
+          format: date-time
+
+    ApplicationStudentView:
+      type: object
+      properties:
+        app_id:
+          type: integer
+        company:
+          type: string
+        job_role:
+          type: string
+        status:
+          type: integer
+          description: "0 = applied, 1 = rejected, 2 = accepted (placed)"
+        applied_at:
+          type: string
+          format: date-time
+
+    ApplicationCompanyView:
+      type: object
+      properties:
+        app_id:
+          type: integer
+        student_name:
+          type: string
+        branch:
+          type: string
+        cgpa:
+          type: number
+          format: float
+        resume_path:
+          type: string
+          nullable: true
+        status:
+          type: integer
+          description: "0 = applied, 1 = rejected, 2 = accepted (placed)"
